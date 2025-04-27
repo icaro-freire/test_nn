@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 from configs.settings import NN
 
-def load_and_prepare_data(data_path='data/sir_vital.csv', n_span=400):
+def load_and_prepare_data(data_path=os.path.join('data', 'sir_vital.csv'), n_span=400):
     """Carrega e prepara os dados"""
     df = pd.read_csv(data_path)
     u_data = df.values
@@ -66,7 +66,7 @@ def train_model(model, optimizer, criterion, t_train, u_train, epochs=int(200e+3
         loss_history.append(loss.item())
         
         if (i + 1) % 5000 == 0:
-            print(f'\nEpoch {i+1}/{epochs} - Loss: {loss.item()}\n')
+            print(f'Loss: {loss.item()}')
     
     return loss_history
 
@@ -92,7 +92,7 @@ def save_results(t_span, u_nn, u_data, loss_history, save_dir='results'):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 1. Salvar dados numéricos
-    np.savez(f'{save_dir}/results_{timestamp}.npz',
+    np.savez(os.path.join(save_dir, f'results_{timestamp}.npz'),
              t_span=t_span,
              u_nn=u_nn,
              loss_history=np.array(loss_history))
@@ -104,11 +104,12 @@ def save_results(t_span, u_nn, u_data, loss_history, save_dir='results'):
     plt.xlabel('Epoch')
     plt.ylabel('Loss (log scale)')
     plt.grid(True)
-    plt.savefig(f'{save_dir}/loss_history_{timestamp}.png')
+    plt.savefig(os.path.join(save_dir, f'loss_history_{timestamp}.png'))
     plt.close()
     
     # 3. Salvar gráficos da aproximação final (S, I, R)
-    save_final_approximation(t_span, u_nn, u_data, f'{save_dir}/final_approximation_{timestamp}.png')
+    save_final_approximation(t_span, u_nn, u_data, 
+                            os.path.join(save_dir, f'final_approximation_{timestamp}.png'))
 
 def main():
     # Configuração inicial
@@ -135,7 +136,7 @@ def main():
     # Salvar todos os resultados
     save_results(t_span, u_nn, u_data, loss_history)
     print("\n=== Treinamento concluído com sucesso! ===")
-    print(f"=== Resultados salvos no diretório 'results/' ===")
+    print(f"=== Resultados salvos no diretório 'results' ===")
     print(f"=== Arquivos gerados: ===")
     print(f"- results_*.npz: Dados numéricos")
     print(f"- loss_history_*.png: Gráfico do histórico de loss")
