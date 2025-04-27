@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# ===== CORREÇÕES PARA OS ERROS =====
+import os
+# Configurações do Qt (para evitar erro de DPI)
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+os.environ["QT_SCREEN_SCALE_FACTORS"] = "1"
+os.environ["QT_SCALE_FACTOR"] = "1"
+# Configurações do OpenMP (para evitar conflito de DLL)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Restante das importações
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,9 +19,11 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 from tqdm import tqdm
-import os
 from datetime import datetime
 from configs.settings import NN
+
+# Configurar backend do matplotlib para evitar problemas gráficos (opcional)
+plt.switch_backend('agg')  # Usa backend não interativo (se não precisar de janelas gráficas)
 
 def load_and_prepare_data(data_path=os.path.join('data', 'sir_vital.csv'), n_span=400):
     """Carrega e prepara os dados"""
