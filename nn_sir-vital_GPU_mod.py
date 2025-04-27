@@ -66,7 +66,7 @@ def train_model(model, optimizer, criterion, t_train, u_train, epochs=int(200e+3
         loss_history.append(loss.item())
         
         if (i + 1) % 5000 == 0:
-            print(f'\nEpoch {i+1}/{epochs} - Loss: {loss.item():.6f}\n')
+            print(f'\nEpoch {i+1}/{epochs} - Loss: {loss.item()}\n')
     
     return loss_history
 
