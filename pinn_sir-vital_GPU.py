@@ -180,7 +180,7 @@ for i in tqdm(range(epochs)):
 # modo avaliação
 model.eval()
 with torch.no_grad():
-    u_pinn_norm = model(t_tensor_span).numpy()
+    u_pinn_norm = model(t_tensor_span).cpu().detach().numpy()
     u_pinn = N * u_pinn_norm
 
 # salvando resultados --------------------------------------
