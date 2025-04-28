@@ -226,10 +226,6 @@ def save_results():
     plt.close()
 
 # main section ------------------------------------------->>
-# move resultados de volta para CPU se necessário para plotagem
-if device.type == 'cuda':
-    u_pinn = u_pinn.cpu()
-
 # salvando todos os resultados
 save_results()
 
