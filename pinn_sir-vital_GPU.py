@@ -2,8 +2,16 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
 import os
+from datetime import datetime
+import torch
+import torch.nn as nn
+from torch import zeros_like
+from torch.optim import Adam
+from torch.utils.data import TensorDataset, DataLoader
+from tqdm import tqdm
+from configs.settings import NN, grad
+
 # configurações do Qt (para evitar erro de DPI)
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
@@ -11,14 +19,6 @@ os.environ["QT_SCREEN_SCALE_FACTORS"] = "1"
 os.environ["QT_SCALE_FACTOR"] = "1"
 # configurações do OpenMP (para evitar conflito de DLL)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-from datetime import datetime
-import torch
-import torch.nn as nn
-from torch import zeros_like
-from torch.optim import Adam
-from tqdm import tqdm
-from configs.settings import NN, grad
 
 # setup para usar GPU --------------------------------------
 torch.backends.cudnn.benchmark = True
@@ -62,13 +62,16 @@ u_data_norm = u_data / N
 # transformando em tensores
 t_tensor      = torch.tensor(t_data_norm).float().view(-1, 1).to(device)
 t_tensor_span = torch.tensor(t_span_norm).float().view(-1, 1).to(device)
-
 u_tensor = torch.tensor(u_data_norm).float().to(device)
 
 # train data 
-t_phy = torch.linspace(0, 1, 100, device = device).view(-1, 1).requires_grad_(True)
+t_phy = torch.linspace(0, 1, 100, device=device).view(-1, 1).requires_grad_(True)
 t_train = t_tensor
 u_train = u_tensor
+
+# Criando Dataset e DataLoader (BATCHES DE 32)
+dataset = TensorDataset(t_train, u_train)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=False)  # shuffle=False para séries temporais!
 
 # instanciando rede neural ---------------------------------
 # hiperparâmetros
@@ -94,83 +97,91 @@ torch.manual_seed(7)
 model = NN(1, 3, 32, 3, nn.Tanh).to(device)
 
 # acicionando parâmetros para estimação
-alpha_1 = torch.rand(1, requires_grad=True, device = device)
-alpha_2 = torch.rand(1, requires_grad=True, device = device)
+alpha_1 = torch.rand(1, requires_grad=True, device=device)
+alpha_2 = torch.rand(1, requires_grad=True, device=device)
 arg_params = [alpha_1, alpha_2]
 parameters = list(model.parameters()) + arg_params
 
 # otimizador e métrica
-optimizer = Adam(parameters, lr = lr)
+optimizer = Adam(parameters, lr=lr)
 normL2 = nn.MSELoss()
 
 # zerando histórico da loss
 loss_history = []
 
-# função de treinamento ------------------------------------
+# função de treinamento (MODIFICADA PARA BATCHES) ----------
 def train_mode():
-    """Função para treinamento da PINN"""
-    # modo de treinamento
+    """Função para treinamento da PINN com batches"""
     model.train()
+    total_loss = 0.0
+    total_loss_data = 0.0
+    total_loss_residual = 0.0
     
-    # data loss
-    u_hat = model(t_train)
-    loss_data = normL2(u_hat, u_train)
+    for t_batch, u_batch in dataloader:
+        # Data loss (por batch)
+        u_hat = model(t_batch)
+        loss_data = normL2(u_hat, u_batch)
 
-    # residual loss
-    u_phy = model(t_phy)
-    S_phy = u_phy[:, 0].view(-1, 1)
-    I_phy = u_phy[:, 1].view(-1, 1)
-    R_phy = u_phy[:, 2].view(-1, 1)
+        # Residual loss (usa t_phy global)
+        u_phy = model(t_phy)
+        S_phy = u_phy[:, 0].view(-1, 1)
+        I_phy = u_phy[:, 1].view(-1, 1)
+        R_phy = u_phy[:, 2].view(-1, 1)
 
-    dSdt = grad(S_phy, t_phy)[0]
-    dIdt = grad(I_phy, t_phy)[0]
-    dRdt = grad(R_phy, t_phy)[0]
+        dSdt = grad(S_phy, t_phy)[0]
+        dIdt = grad(I_phy, t_phy)[0]
+        dRdt = grad(R_phy, t_phy)[0]
 
-    phy_S = dSdt - (eta_nn - mu_nn * S_phy - beta_nn * S_phy * I_phy)
-    phy_I = dIdt - (       - mu_nn * I_phy + beta_nn * S_phy * I_phy - gamma_nn * I_phy)
-    phy_R = dRdt - (       - mu_nn * R_phy                           + gamma_nn * I_phy)
+        phy_S = dSdt - (eta_nn - mu_nn * S_phy - beta_nn * S_phy * I_phy)
+        phy_I = dIdt - (-mu_nn * I_phy + beta_nn * S_phy * I_phy - gamma_nn * I_phy)
+        phy_R = dRdt - (-mu_nn * R_phy + gamma_nn * I_phy)
 
-    loss_S = normL2(phy_S, zeros_like(phy_S))
-    loss_I = normL2(phy_I, zeros_like(phy_I))
-    loss_R = normL2(phy_R, zeros_like(phy_R))
+        loss_S = normL2(phy_S, zeros_like(phy_S))
+        loss_I = normL2(phy_I, zeros_like(phy_I))
+        loss_R = normL2(phy_R, zeros_like(phy_R))
+        loss_residual = loss_S + loss_I + loss_R
 
-    loss_residual = loss_S + loss_I + loss_R
+        # Total loss (ponderada)
+        loss = (alpha_1) * loss_data + (alpha_2) * loss_residual
 
-    # total loss
-    loss = (alpha_1) * loss_data + (alpha_2) * loss_residual
+        # Backpropagation
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-    return loss, loss_data, loss_residual
+        # Acumula as losses
+        total_loss += loss.item() * len(t_batch)
+        total_loss_data += loss_data.item() * len(t_batch)
+        total_loss_residual += loss_residual.item() * len(t_batch)
+    
+    # Médias sobre todos os batches
+    avg_loss = total_loss / len(dataset)
+    avg_loss_data = total_loss_data / len(dataset)
+    avg_loss_residual = total_loss_residual / len(dataset)
+    
+    return avg_loss, avg_loss_data, avg_loss_residual
 
 # loop de treinamento --------------------------------------
 for i in tqdm(range(epochs)):
-    # hiperparâmetros e parâmetros
+    # Atualiza parâmetros
     eta_nn, beta_nn, gamma_nn, mu_nn = parameters_nn
     alpha_1, alpha_2 = arg_params
     alpha_1 = torch.exp(alpha_1)
     alpha_2 = torch.exp(alpha_2)
-    #
-    # garantindo parâmetros positivos
-    alpha_1 = torch.exp(alpha_1)
-    alpha_2 = torch.exp(alpha_2)
-    #
-    # forward 
+    
+    # Forward + Backward
     loss, loss_data, loss_residual = train_mode()
-    #
-    # backward
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    #
-    # history
-    loss_history.append(loss.item())
-    #
-    # prints
+    
+    # Guarda no histórico
+    loss_history.append(loss)
+    
+    # Logging
     if (i + 1) % 5000 == 0:
         print(f'''
         ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※
-        loss          = {loss.item()}
-        loss_data     = {loss_data.item()}
-        loss_residual = {loss_residual.item()}
+        loss          = {loss}
+        loss_data     = {loss_data}
+        loss_residual = {loss_residual}
         ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※
         alpha_1 = {alpha_1.item()/T}
         alpha_2 = {alpha_2.item()/T}
@@ -186,7 +197,6 @@ with torch.no_grad():
 # salvando resultados --------------------------------------
 def save_results():
     """Função para salvar resultados"""
-    # verificando diretório para salvar resultados
     save_dir = 'results' 
     os.makedirs(save_dir, exist_ok=True)
     time_mark = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -197,40 +207,37 @@ def save_results():
     np.savetxt(
         os.path.join(save_dir, f'alphas_results_{time_mark}.txt'), 
         [alpha_1_pinn, alpha_2_pinn],
-        header = "alpha_1, alpha_2"
+        header="alpha_1, alpha_2"
     )
 
     # 2. salvando históricos da loss
     plt.figure(figsize=(10, 6))
-    plt.semilogy(loss_history, label = "Loss History")
-    plt.legend(fontsize = 'large')
+    plt.semilogy(loss_history, label="Loss History")
+    plt.legend(fontsize='large')
     plt.tight_layout()
     plt.grid(True)
-    plt.savefig(os.path.join(save_dir, f'loss_history_{time_mark}.png'), dpi = 300)
+    plt.savefig(os.path.join(save_dir, f'loss_history_{time_mark}.png'), dpi=300)
     plt.close()
 
     # 3. salvando gráfico da aproximação final
-    fig, axs = plt.subplots(1, 3, figsize = (20, 4))
+    fig, axs = plt.subplots(1, 3, figsize=(20, 4))
     labels = ['Suscetíveis', 'Infecciosos', 'Removidos']
 
     for i in range(3):
-        axs[i].scatter(t_data, u_data[:, i], color="tab:orange", label = "Dados Reais")
-        axs[i].plot(t_span, u_pinn[:, i], color="tab:red", linewidth = 2, label = "PINN")
+        axs[i].scatter(t_data, u_data[:, i], color="tab:orange", label="Dados Reais")
+        axs[i].plot(t_span, u_pinn[:, i], color="tab:red", linewidth=2, label="PINN")
         axs[i].set_title(labels[i], fontsize='x-large')
         axs[i].set_xlabel('Tempo', fontsize='large')
-        axs[i].legend(fontsize = 'large')
+        axs[i].legend(fontsize='large')
 
     axs[0].set_ylabel('Número de Indivíduos', fontsize='large')
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f'final_plot_{time_mark}.png'), dpi = 300)
+    plt.savefig(os.path.join(save_dir, f'final_plot_{time_mark}.png'), dpi=300)
     plt.close()
 
-# main section ------------------------------------------->>
-# salvando todos os resultados
+# main section --------------------------------------------
 save_results()
 
 print(f'''
-
 ≫≫≫≫≫≫≫ FIM DO PROCESSO ≪≪≪≪≪≪≪≪
-
 ''')
